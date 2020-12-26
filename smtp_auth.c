@@ -20,17 +20,8 @@ user id ←base64
 password ←base64
 235 Authentication successful （成功）
 535 Incorrect authentication data （失敗）
-
-■base64 エンコード法: 以下の perl を実行
-#!/usr/bin/perl
-require 'mimew.pl';
-&benflush( "qp" );
-print( &bodyencode( 'user' ) . &benflush() . "\n" );
-print( &bodyencode( 'pass' ) . &benflush() . "\n" );
 */
 
-#define BASE64_USER	"your_base64_user"
-#define BASE64_PASS	"your_base64_pwd"
 #define PORT_SRC 25
 #define PORT_DST 10025
 
@@ -50,6 +41,8 @@ print( &bodyencode( 'pass' ) . &benflush() . "\n" );
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <termios.h>
+
+#include "account.h"
 
 #define DEBUG
 

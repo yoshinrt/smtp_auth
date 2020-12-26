@@ -1,8 +1,11 @@
 # -*- tab-width:4 -*-
 
 smtp_auth: smtp_auth.c
-	gcc -L$(XToolRoot)/mips/usr/lib -O1 -o $@ $<
-	strip $@
+	$(CROSS_TOOL)gcc -O1 -o $@ $<
+	$(CROSS_TOOL)strip $@
+
+ag300h:
+	$(MAKE) CROSS_TOOL="mips-openwrt-linux-musl-" smtp_auth
 
 clean:
 	rm -f smtp_auth

@@ -31,16 +31,20 @@ print( &bodyencode( 'pass' ) . &benflush() . "\n" );
 
 #define BASE64_USER	"your_base64_user"
 #define BASE64_PASS	"your_base64_pwd"
-#define PORT_SRC 10025
-#define PORT_DST 10026
+#define PORT_SRC 25
+#define PORT_DST 10025
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <unistd.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/select.h>
+#include <arpa/inet.h>
 #include <signal.h>
 
 #include <sys/stat.h>
@@ -55,7 +59,7 @@ print( &bodyencode( 'pass' ) . &benflush() . "\n" );
 	#define DebugMsg( fmt, ... )
 #endif
 
-static inline max( int a, int b ){
+static inline int max( int a, int b ){
 	return a > b ? a : b;
 }
 
@@ -319,7 +323,11 @@ int main( int argc, char **argv ){
 	fd_set rfds, rfds_tmp;
 	struct termios ioOld, ioNew;
 	
-	int	iBaud = B9600;
+	int iSrcPort = PORT_SRC;
+	int iDstPort = PORT_DST;
+	if( argc >= 2 ) iDstPort = atoi( argv[ 1 ]);
+	if( argc >= 3 ) iSrcPort = atoi( argv[ 2 ]);
+	printf( "smth_auth: %d <-- %d\n", iDstPort, iSrcPort );
 	
 	signal( SIGPIPE, SIG_IGN );	/* シグナルを無視する */
 	
@@ -332,7 +340,7 @@ int main( int argc, char **argv ){
 	}
 	
 	saSrcAddr.sin_family = AF_INET;
-	saSrcAddr.sin_port = htons( PORT_SRC );
+	saSrcAddr.sin_port = htons( iSrcPort );
 	saSrcAddr.sin_addr.s_addr = INADDR_ANY;
 	
 	if( bind( fdSockListen, ( struct sockaddr *)&saSrcAddr, sizeof( saSrcAddr )) != 0 ){
@@ -363,7 +371,7 @@ int main( int argc, char **argv ){
 		// dest socket open
 		struct sockaddr_in saDstAddr;
 		memset( &saDstAddr, 0, sizeof( saDstAddr ));
-		saDstAddr.sin_port			= htons( PORT_DST );
+		saDstAddr.sin_port			= htons( iDstPort );
 		saDstAddr.sin_family		= AF_INET;
 		saDstAddr.sin_addr.s_addr	= inet_addr( "127.0.0.1" );
 		fdDstSock = socket( AF_INET, SOCK_STREAM, 0 );

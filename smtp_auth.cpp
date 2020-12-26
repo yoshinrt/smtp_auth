@@ -81,17 +81,39 @@ int g_iState = S_OPENING;
 /*** buffer *****************************************************************/
 
 #define BUF_SIZE	1024
-typedef struct {
-	char	szBuf[ BUF_SIZE ];
-	int 	iTail;
-} tStrBuf;
-tStrBuf g_SrcBuf = { "", 0 }, g_DstBuf = { "", 0 };
-
-int ReadBuf( tStrBuf *pBuf, int fd, fd_set *pfdset ){
-	if( !FD_ISSET( fd, pfdset )) return 0;
+class CStrBuf {
+public:
+	char	m_szBuf[ BUF_SIZE ];
+	int 	m_iTail;
 	
+	CStrBuf(){
+		m_iTail = 0;
+	}
+	
+	int WriteBuf( const char *pBuf, int fd, int iSize );
+	int ReadBuf( int fd );
+	
+	int WriteBuf( int fd ){
+		return WriteBuf2( m_szBuf, fd, m_iTail );
+	}
+	
+	int WriteBuf( int fd, int iSize ){
+		return WriteBuf2( m_szBuf, fd, iSize );
+	}
+	
+	static int WriteBuf2( const char *pBuf, int fd, int iSize );
+	
+	int ReadLine( void );
+	void ShiftBuf( int iSize );
+	int WriteLine( int fd, int iSize );
+	int GetResponseCode( void );
+};
+
+CStrBuf g_SrcBuf, g_DstBuf;
+
+int CStrBuf::ReadBuf( int fd ){
 	// リード
-	int iSize = read( fd, pBuf->szBuf + pBuf->iTail, BUF_SIZE - pBuf->iTail );
+	int iSize = read( fd, m_szBuf + m_iTail, BUF_SIZE - m_iTail );
 	//DebugMsg( "rd: fd=%d size=%d\n", fd, iSize );
 	
 	if( iSize < 0 ){
@@ -99,13 +121,15 @@ int ReadBuf( tStrBuf *pBuf, int fd, fd_set *pfdset ){
 		return -1;
 	}
 	
-	if( iSize ) pBuf->iTail += iSize;
+	if( iSize ) m_iTail += iSize;
 	
 	// FD_ISSET 通過 かつ size=0 はおかしいので -1 を返す
 	return iSize > 0 ? iSize : -1;
 }
 
-int WriteBuf( char *pBuf, int fd, int iSize ){
+#define WriteBufConst( str, fd ) CStrBuf::WriteBuf2( str, fd, sizeof( str ) - 1 )
+
+int CStrBuf::WriteBuf2( const char *pBuf, int fd, int iSize ){
 	// write
 	int iWriteSize	= 0;
 	
@@ -134,19 +158,19 @@ int WriteBuf( char *pBuf, int fd, int iSize ){
 	return 1;
 }
 
-int ReadLine( tStrBuf *pBuf ){
+int CStrBuf::ReadLine( void ){
 	// top から \n をサーチ
 	int i;
-	for( i = 0; i < pBuf->iTail; ++i ){
-		if( pBuf->szBuf[ i ] == '\r' || pBuf->szBuf[ i ] == '\n' ){
+	for( i = 0; i < m_iTail; ++i ){
+		if( m_szBuf[ i ] == '\r' || m_szBuf[ i ] == '\n' ){
 			// \n が見つかったので改行スキップ
-			for(; i < pBuf->iTail && ( pBuf->szBuf[ i ] == '\r' || pBuf->szBuf[ i ] == '\n' ); ++i );
+			for(; i < m_iTail && ( m_szBuf[ i ] == '\r' || m_szBuf[ i ] == '\n' ); ++i );
 			
 			#ifdef DEBUG
 				int j;
 				printf( "%d:ReadLine>", g_iState );
 				for( j = 0; j < i; ++j ){
-					char c = pBuf->szBuf[ j ];
+					char c = m_szBuf[ j ];
 					if( c >= ' ' ) putchar( c );
 					else printf( "[%02X]", c );
 				}
@@ -160,39 +184,41 @@ int ReadLine( tStrBuf *pBuf ){
 	return 0;
 }
 
-int ShiftBuf( tStrBuf *pBuf, int iSize ){
+void CStrBuf::ShiftBuf( int iSize ){
 	int i = 0;
 	
-	for(; iSize < pBuf->iTail; ++iSize ){
-		pBuf->szBuf[ i++ ] = pBuf->szBuf[ iSize ];
+	for(; iSize < m_iTail; ++iSize ){
+		m_szBuf[ i++ ] = m_szBuf[ iSize ];
 	}
 	
-	pBuf->iTail = i;
+	m_iTail = i;
 }
 
-int WriteLine( tStrBuf *pBuf, int fd, int iSize ){
-	WriteBuf( pBuf->szBuf, fd, iSize );
-	ShiftBuf( pBuf, iSize );
+int CStrBuf::WriteLine( int fd, int iSize ){
+	int iRet = WriteBuf2( m_szBuf, fd, iSize );
+	ShiftBuf( iSize );
+	
+	return iRet;
 }
 
-/*** main *******************************************************************/
-
-int GetResponseCode( tStrBuf *pBuf ){
+int CStrBuf::GetResponseCode( void ){
 	int i;
 	int iCode = 0;
 	
-	for( i = 0; i < pBuf->iTail; ++i ){
-		if( pBuf->szBuf[ i ] == '-' ){
+	for( i = 0; i < m_iTail; ++i ){
+		if( m_szBuf[ i ] == '-' ){
 			iCode += 1000;
 			break;
-		}else if( isdigit( pBuf->szBuf[ i ])){
-			iCode = iCode * 10 + pBuf->szBuf[ i ] - '0';
+		}else if( isdigit( m_szBuf[ i ])){
+			iCode = iCode * 10 + m_szBuf[ i ] - '0';
 		}else{
 			break;
 		}
 	}
 	return iCode;
 }
+
+/*** main *******************************************************************/
 
 int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 	
@@ -206,99 +232,99 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 		switch( g_iState ){
 			case S_OPENING:
 				
-				if(( i = ReadLine( &g_DstBuf )) == 0 ) return 0;
+				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
-				iCode = GetResponseCode( &g_DstBuf );
+				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
 					g_iState = S_HELO;
 				}
 				
 				printf( ">>>>%d %d\n", iCode, i );
-				WriteLine( &g_DstBuf, fdSrc, i );
+				if( g_DstBuf.WriteLine( fdSrc, i ) < 0 ) return -1;
 				if( 300 <= iCode && iCode < 1000 ) return -1;
 				
 			Case S_HELO:
-				if(( i = ReadLine( &g_SrcBuf )) == 0 ) return 0;
+				if(( i = g_SrcBuf.ReadLine()) == 0 ) return 0;
 				
 				if(
-					strncmp( g_SrcBuf.szBuf, "HELO", 4 ) == 0 ||
-					strncmp( g_SrcBuf.szBuf, "EHLO", 4 ) == 0
+					strncmp( g_SrcBuf.m_szBuf, "HELO", 4 ) == 0 ||
+					strncmp( g_SrcBuf.m_szBuf, "EHLO", 4 ) == 0
 				){
 					g_iState = S_HELO_ACK;
 				}
 				
-				WriteLine( &g_SrcBuf, fdDst, i );
+				if( g_SrcBuf.WriteLine( fdDst, i ) < 0 ) return -1;
 			
 			Case S_HELO_ACK:
 				
-				if(( i = ReadLine( &g_DstBuf )) == 0 ) return 0;
+				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
-				iCode = GetResponseCode( &g_DstBuf );
+				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
 					g_iState = S_AUTH;
 				}
 				
-				WriteLine( &g_DstBuf, fdSrc, i );
+				if( g_DstBuf.WriteLine( fdSrc, i ) < 0 ) return -1;
 				if( 300 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_AUTH:
 				#define STR_AUTH	"AUTH LOGIN\r\n"
-				WriteBuf( STR_AUTH, fdDst, sizeof( STR_AUTH ) - 1 );
+				if( WriteBufConst( STR_AUTH, fdDst ) < 0 ) return -1;
 				g_iState = S_AUTH_ACK;
 			
 			Case S_AUTH_ACK:
 				
-				if(( i = ReadLine( &g_DstBuf )) == 0 ) return 0;
+				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
-				iCode = GetResponseCode( &g_DstBuf );
+				iCode = g_DstBuf.GetResponseCode();
 				if( 300 <= iCode && iCode <= 399 ){
 					g_iState = S_USER;
 				}
 				
-				ShiftBuf( &g_DstBuf, i );
+				g_DstBuf.ShiftBuf( i );
 				if( 400 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_USER:
-				WriteBuf( BASE64_USER "\r\n", fdDst, sizeof( BASE64_USER ) + 1 );
+				if( WriteBufConst( BASE64_USER "\r\n", fdDst ) < 0 ) return -1;
 				g_iState = S_USER_ACK;
 			
 			Case S_USER_ACK:
 				
-				if(( i = ReadLine( &g_DstBuf )) == 0 ) return 0;
+				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
-				iCode = GetResponseCode( &g_DstBuf );
+				iCode = g_DstBuf.GetResponseCode();
 				if( 300 <= iCode && iCode <= 399 ){
 					g_iState = S_PASSWD;
 				}
 				
-				ShiftBuf( &g_DstBuf, i );
+				g_DstBuf.ShiftBuf( i );
 				if( 400 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_PASSWD:
-				WriteBuf( BASE64_PASS "\r\n", fdDst, sizeof( BASE64_PASS ) + 1 );
+				if( WriteBufConst( BASE64_PASS "\r\n", fdDst ) < 0 ) return -1;
 				g_iState = S_PASSWD_ACK;
 			
 			Case S_PASSWD_ACK:
 				
-				if(( i = ReadLine( &g_DstBuf )) == 0 ) return 0;
+				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
-				iCode = GetResponseCode( &g_DstBuf );
+				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
 					g_iState = S_REPEAT;
 				}
 				
-				ShiftBuf( &g_DstBuf, i );
+				g_DstBuf.ShiftBuf( i );
 				if( 300 <= iCode && iCode < 1000 ) return -1;
 			
 			Default:
-				if( g_SrcBuf.iTail ){
-					if( WriteBuf( g_SrcBuf.szBuf, fdDst, g_SrcBuf.iTail ) < 0 ) iRet = -1;
-					g_SrcBuf.iTail = 0;
+				if( g_SrcBuf.m_iTail ){
+					if( g_SrcBuf.WriteBuf( fdDst ) < 0 ) iRet = -1;
+					g_SrcBuf.m_iTail = 0;
 				}
 				
-				if( g_DstBuf.iTail ){
-					if( WriteBuf( g_DstBuf.szBuf, fdSrc, g_DstBuf.iTail ) < 0 ) iRet = -1;
-					g_DstBuf.iTail = 0;
+				if( g_DstBuf.m_iTail ){
+					if( g_DstBuf.WriteBuf( fdSrc ) < 0 ) iRet = -1;
+					g_DstBuf.m_iTail = 0;
 				}
 				return 0;
 		}
@@ -311,7 +337,7 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 int main( int argc, char **argv ){
 	int fdSockListen = -1, fdSrcSock = -1, fdDstSock = -1;
 	struct sockaddr_in saSrcAddr, saClient;
-	int iLen;
+	unsigned int uLen;
 	int i;
 	fd_set rfds, rfds_tmp;
 	struct termios ioOld, ioNew;
@@ -353,8 +379,8 @@ int main( int argc, char **argv ){
 		
 		DebugMsg( "waiting connection...\n" );
 		
-		iLen = sizeof( saClient );
-		fdSrcSock = accept( fdSockListen, ( struct sockaddr *)&saClient, &iLen );
+		uLen = sizeof( saClient );
+		fdSrcSock = accept( fdSockListen, ( struct sockaddr *)&saClient, &uLen );
 		if( fdSrcSock < 0 ){
 			perror( "src accept" );
 			break;
@@ -413,8 +439,16 @@ int main( int argc, char **argv ){
 			}
 			
 			// リード
-			if( ReadBuf( &g_SrcBuf, fdSrcSock, &rfds_tmp ) < 0 ) bBreak = 1;
-			if( ReadBuf( &g_DstBuf, fdDstSock, &rfds_tmp ) < 0 ) bBreak = 1;
+			if(
+				FD_ISSET( fdSrcSock, &rfds_tmp ) &&
+				g_SrcBuf.ReadBuf( fdSrcSock ) < 0
+			) bBreak = 1;
+			
+			if(
+				FD_ISSET( fdDstSock, &rfds_tmp ) &&
+				g_DstBuf.ReadBuf( fdDstSock ) < 0
+			) bBreak = 1;
+			
 			if( Repeater( fdDstSock, fdSrcSock, &rfds_tmp ) < 0 ) bBreak = 1;
 		}
 		

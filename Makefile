@@ -1,7 +1,7 @@
 # -*- tab-width:4 -*-
 
-smtp_auth: smtp_auth.cpp account.h
-	$(CROSS_TOOL)g++ -O1 -o $@ $<
+smtp_auth: smtp_auth.c account.h
+	$(CROSS_TOOL)gcc -O1 -o $@ $<
 	$(CROSS_TOOL)strip $@
 
 account.h:

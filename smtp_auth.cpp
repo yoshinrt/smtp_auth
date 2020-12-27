@@ -76,11 +76,9 @@ enum {
 	S_REPEAT,
 };
 
-int g_iState = S_OPENING;
-
 /*** buffer *****************************************************************/
 
-#define BUF_SIZE	1024
+#define BUF_SIZE	256
 class CStrBuf {
 public:
 	char	m_szBuf[ BUF_SIZE ];
@@ -135,7 +133,7 @@ int CStrBuf::WriteBuf2( const char *pBuf, int fd, int iSize ){
 	
 	#ifdef DEBUG
 		int i;
-		printf( "%d:%d> ", g_iState, fd );
+		printf( "%d> ", fd );
 		for( i = 0; i < iSize; ++i ){
 			char c = pBuf[ i ];
 			if( c >= ' ' ) putchar( c );
@@ -168,7 +166,7 @@ int CStrBuf::ReadLine( void ){
 			
 			#ifdef DEBUG
 				int j;
-				printf( "%d:ReadLine>", g_iState );
+				printf( "ReadLine>" );
 				for( j = 0; j < i; ++j ){
 					char c = m_szBuf[ j ];
 					if( c >= ' ' ) putchar( c );
@@ -218,29 +216,128 @@ int CStrBuf::GetResponseCode( void ){
 	return iCode;
 }
 
-/*** main *******************************************************************/
+/*** CConnection class *****************************************************/
 
-int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
+class CConnection {
+public:
+	
+	CStrBuf	m_SrcBuf;
+	CStrBuf	m_DstBuf;
+	
+	int m_fdSrcSock;
+	int m_fdDstSock;
+	int m_iState;
+	
+	static fd_set m_rfds;
+	static fd_set m_rfdsActive;
+	static int m_fdMax;
+	
+	CConnection(){
+		m_fdSrcSock	= -1;
+		m_fdSrcSock	= -1;
+		m_iState	= S_OPENING;
+	}
+	
+	int NewConnection( int fdSockListen, int iDstPort );
+	int Repeater( void );
+	int ProcessMessage( fd_set *pfdset );
+	void Close( void );
+};
+
+fd_set CConnection::m_rfds;
+fd_set CConnection::m_rfdsActive;
+int CConnection::m_fdMax;
+
+//*** new connection
+
+int CConnection::NewConnection( int fdSockListen, int iDstPort ){
+	DebugMsg( "new connection\n" );
+	
+	struct sockaddr_in saClient;
+	unsigned int uLen = sizeof( saClient );
+	
+	do{
+		m_fdSrcSock = accept( fdSockListen, ( struct sockaddr *)&saClient, &uLen );
+		if( m_fdSrcSock < 0 ){
+			perror( "src accept" );
+			break;
+		}
+		
+		DebugMsg( "opening dst port...\n" );
+		// dest socket open
+		struct sockaddr_in saDstAddr;
+		memset( &saDstAddr, 0, sizeof( saDstAddr ));
+		saDstAddr.sin_port			= htons( iDstPort );
+		saDstAddr.sin_family		= AF_INET;
+		saDstAddr.sin_addr.s_addr	= inet_addr( "127.0.0.1" );
+		m_fdDstSock = socket( AF_INET, SOCK_STREAM, 0 );
+		if( m_fdDstSock < 0 ){
+			perror( "dst socket" );
+			break;
+		}
+		
+		int i = connect( m_fdDstSock, ( struct sockaddr *)&saDstAddr, sizeof( saDstAddr ));
+		if( i < 0 ){
+			perror( "dst connect" );
+			break;
+		}
+		
+		DebugMsg( "start session\n" );
+		
+		// データが尽きるまでループ
+		m_fdMax = max( max( m_fdSrcSock, m_fdDstSock ), m_fdMax - 1 ) + 1;
+		FD_SET( m_fdSrcSock, &m_rfds );
+		FD_SET( m_fdDstSock, &m_rfds );
+		
+		return 0;
+	}while( 0 );
+	
+	Close();
+	return -1;
+}
+
+//*** repeater
+
+int CConnection::Repeater( void ){
+	int iRet = 0;
+	
+	// リード
+	if(
+		FD_ISSET( m_fdSrcSock, &m_rfdsActive ) &&
+		g_SrcBuf.ReadBuf( m_fdSrcSock ) < 0
+	) iRet = -1;
+	
+	if(
+		FD_ISSET( m_fdDstSock, &m_rfdsActive ) &&
+		g_DstBuf.ReadBuf( m_fdDstSock ) < 0
+	) iRet = -1;
+	
+	if( ProcessMessage( &m_rfdsActive ) < 0 ) iRet = -1;
+	
+	return iRet;
+}
+
+int CConnection::ProcessMessage( fd_set *pfdset ){
 	
 	int i;
 	int iCode;
 	int iRet = 0;
 	
 	while( 1 ){
-		//DebugMsg( "State: %d\n", g_iState );
+		//DebugMsg( "State: %d\n", m_iState );
 		
-		switch( g_iState ){
+		switch( m_iState ){
 			case S_OPENING:
 				
 				if(( i = g_DstBuf.ReadLine()) == 0 ) return 0;
 				
 				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
-					g_iState = S_HELO;
+					m_iState = S_HELO;
 				}
 				
 				printf( ">>>>%d %d\n", iCode, i );
-				if( g_DstBuf.WriteLine( fdSrc, i ) < 0 ) return -1;
+				if( g_DstBuf.WriteLine( m_fdSrcSock, i ) < 0 ) return -1;
 				if( 300 <= iCode && iCode < 1000 ) return -1;
 				
 			Case S_HELO:
@@ -250,10 +347,10 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 					strncmp( g_SrcBuf.m_szBuf, "HELO", 4 ) == 0 ||
 					strncmp( g_SrcBuf.m_szBuf, "EHLO", 4 ) == 0
 				){
-					g_iState = S_HELO_ACK;
+					m_iState = S_HELO_ACK;
 				}
 				
-				if( g_SrcBuf.WriteLine( fdDst, i ) < 0 ) return -1;
+				if( g_SrcBuf.WriteLine( m_fdDstSock, i ) < 0 ) return -1;
 			
 			Case S_HELO_ACK:
 				
@@ -261,16 +358,16 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 				
 				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
-					g_iState = S_AUTH;
+					m_iState = S_AUTH;
 				}
 				
-				if( g_DstBuf.WriteLine( fdSrc, i ) < 0 ) return -1;
+				if( g_DstBuf.WriteLine( m_fdSrcSock, i ) < 0 ) return -1;
 				if( 300 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_AUTH:
 				#define STR_AUTH	"AUTH LOGIN\r\n"
-				if( WriteBufConst( STR_AUTH, fdDst ) < 0 ) return -1;
-				g_iState = S_AUTH_ACK;
+				if( WriteBufConst( STR_AUTH, m_fdDstSock ) < 0 ) return -1;
+				m_iState = S_AUTH_ACK;
 			
 			Case S_AUTH_ACK:
 				
@@ -278,15 +375,15 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 				
 				iCode = g_DstBuf.GetResponseCode();
 				if( 300 <= iCode && iCode <= 399 ){
-					g_iState = S_USER;
+					m_iState = S_USER;
 				}
 				
 				g_DstBuf.ShiftBuf( i );
 				if( 400 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_USER:
-				if( WriteBufConst( BASE64_USER "\r\n", fdDst ) < 0 ) return -1;
-				g_iState = S_USER_ACK;
+				if( WriteBufConst( BASE64_USER "\r\n", m_fdDstSock ) < 0 ) return -1;
+				m_iState = S_USER_ACK;
 			
 			Case S_USER_ACK:
 				
@@ -294,15 +391,15 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 				
 				iCode = g_DstBuf.GetResponseCode();
 				if( 300 <= iCode && iCode <= 399 ){
-					g_iState = S_PASSWD;
+					m_iState = S_PASSWD;
 				}
 				
 				g_DstBuf.ShiftBuf( i );
 				if( 400 <= iCode && iCode < 1000 ) return -1;
 			
 			Case S_PASSWD:
-				if( WriteBufConst( BASE64_PASS "\r\n", fdDst ) < 0 ) return -1;
-				g_iState = S_PASSWD_ACK;
+				if( WriteBufConst( BASE64_PASS "\r\n", m_fdDstSock ) < 0 ) return -1;
+				m_iState = S_PASSWD_ACK;
 			
 			Case S_PASSWD_ACK:
 				
@@ -310,7 +407,7 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 				
 				iCode = g_DstBuf.GetResponseCode();
 				if( 200 <= iCode && iCode <= 299 ){
-					g_iState = S_REPEAT;
+					m_iState = S_REPEAT;
 				}
 				
 				g_DstBuf.ShiftBuf( i );
@@ -318,12 +415,12 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 			
 			Default:
 				if( g_SrcBuf.m_iTail ){
-					if( g_SrcBuf.WriteBuf( fdDst ) < 0 ) iRet = -1;
+					if( g_SrcBuf.WriteBuf( m_fdDstSock ) < 0 ) iRet = -1;
 					g_SrcBuf.m_iTail = 0;
 				}
 				
 				if( g_DstBuf.m_iTail ){
-					if( g_DstBuf.WriteBuf( fdSrc ) < 0 ) iRet = -1;
+					if( g_DstBuf.WriteBuf( m_fdSrcSock ) < 0 ) iRet = -1;
 					g_DstBuf.m_iTail = 0;
 				}
 				return 0;
@@ -332,15 +429,21 @@ int Repeater( int fdDst, int fdSrc, fd_set *pfdset ){
 	return 0;
 }
 
+//*** close socket
+
+void CConnection::Close( void ){
+	if( m_fdSrcSock >= 0 ) FD_CLR( m_fdSrcSock, &m_rfds );
+	if( m_fdDstSock >= 0 ) FD_CLR( m_fdDstSock, &m_rfds );
+	
+	CloseSocket( m_fdSrcSock );
+	CloseSocket( m_fdDstSock );
+}
+
 /*** main *******************************************************************/
 
 int main( int argc, char **argv ){
-	int fdSockListen = -1, fdSrcSock = -1, fdDstSock = -1;
-	struct sockaddr_in saSrcAddr, saClient;
-	unsigned int uLen;
-	int i;
-	fd_set rfds, rfds_tmp;
-	struct termios ioOld, ioNew;
+	int fdSockListen = -1;
+	struct sockaddr_in saSrcAddr;
 	
 	int iSrcPort = PORT_SRC;
 	int iDstPort = PORT_DST;
@@ -372,94 +475,40 @@ int main( int argc, char **argv ){
 		return 1;
 	}
 	
+	CConnection Conn;
+	FD_ZERO( &Conn.m_rfds );
+	FD_SET( fdSockListen, &Conn.m_rfds );
+	Conn.m_fdMax = fdSockListen + 1;
+	
 	DebugMsg( "opening listen port done.\n" );
 	
 	// コネクション毎の処理
 	while( 1 ){
+		// リード Conn.m_fdDstSock コレクション
+		Conn.m_rfdsActive = Conn.m_rfds;
+		int i = select( Conn.m_fdMax, &Conn.m_rfdsActive, NULL, NULL, NULL );
+		DebugMsg( "select %d\n", i );
 		
-		DebugMsg( "waiting connection...\n" );
-		
-		uLen = sizeof( saClient );
-		fdSrcSock = accept( fdSockListen, ( struct sockaddr *)&saClient, &uLen );
-		if( fdSrcSock < 0 ){
-			perror( "src accept" );
-			break;
-		}
-		
-		DebugMsg( "opening dst port...\n" );
-		// dest socket open
-		struct sockaddr_in saDstAddr;
-		memset( &saDstAddr, 0, sizeof( saDstAddr ));
-		saDstAddr.sin_port			= htons( iDstPort );
-		saDstAddr.sin_family		= AF_INET;
-		saDstAddr.sin_addr.s_addr	= inet_addr( "127.0.0.1" );
-		fdDstSock = socket( AF_INET, SOCK_STREAM, 0 );
-		if( fdDstSock < 0 ){
-			perror( "dst socket" );
-			break;
-		}
-		
-		i = connect( fdDstSock, ( struct sockaddr *)&saDstAddr, sizeof( saDstAddr ));
 		if( i < 0 ){
-			perror( "dst connect" );
+			perror( "select" );
 			break;
 		}
 		
-		DebugMsg( "start session\n" );
-		
-		// データが尽きるまでループ
-		int fdMax = max( max( fdSrcSock, fdDstSock ), fdSockListen ) + 1;
-		FD_ZERO( &rfds );
-		FD_SET( fdSrcSock, &rfds );
-		FD_SET( fdDstSock, &rfds );
-		FD_SET( fdSockListen, &rfds );
-		
-		g_iState = S_OPENING;
-		
-		int bBreak = 0;
-		while( !bBreak ){
-			// リード fdDstSock コレクション
-			rfds_tmp = rfds;
-			i = select( fdMax, &rfds_tmp, NULL, NULL, NULL );
-			
-			if( i < 0 ){
-				perror( "select" );
-				break;
-			}
-			//DebugMsg( "sel_exit%d src:%d dst:%d listen:%d\n", i,
-			//	FD_ISSET( fdSrcSock, &rfds_tmp ),
-			//	FD_ISSET( fdDstSock, &rfds_tmp ),
-			//	FD_ISSET( fdSockListen, &rfds_tmp )
-			//);
-			
-			// リッスンソケットに接続があったら，現接続は切断
-			if( FD_ISSET( fdSockListen, &rfds_tmp )){
-				DebugMsg( "new connection\n" );
-				break;
-			}
-			
-			// リード
-			if(
-				FD_ISSET( fdSrcSock, &rfds_tmp ) &&
-				g_SrcBuf.ReadBuf( fdSrcSock ) < 0
-			) bBreak = 1;
-			
-			if(
-				FD_ISSET( fdDstSock, &rfds_tmp ) &&
-				g_DstBuf.ReadBuf( fdDstSock ) < 0
-			) bBreak = 1;
-			
-			if( Repeater( fdDstSock, fdSrcSock, &rfds_tmp ) < 0 ) bBreak = 1;
+		// 新規接続
+		if( FD_ISSET( fdSockListen, &Conn.m_rfdsActive )){
+			Conn.NewConnection( fdSockListen, iDstPort );
 		}
 		
-		DebugMsg( "end session\n" );
-		//tcsetattr( fdDstSock, TCSANOW, &ioOld );
-		CloseSocket( fdDstSock );
-		CloseSocket( fdSrcSock );
+		// リピーター
+		if( Conn.Repeater() < 0 ){
+			DebugMsg( "end session\n" );
+			Conn.Close();
+			
+			Conn.m_fdMax = fdSockListen + 1;
+		}
 	}
 	
-	CloseSocket( fdDstSock );
-	CloseSocket( fdSrcSock );
+	Conn.Close();
 	CloseSocket( fdSockListen );
 	
 	return 0;

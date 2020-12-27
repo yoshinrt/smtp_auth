@@ -11,7 +11,7 @@ socket( $SockListen, PF_INET, SOCK_STREAM, getprotobyname( 'tcp' ))
 setsockopt( $SockListen, SOL_SOCKET, SO_REUSEADDR, 1 );
 
 # 2. 受付用ソケット情報の作成
-my $pack_addr = sockaddr_in( 10025, INADDR_ANY );
+my $pack_addr = sockaddr_in( $ARGV[ 0 ] || 10025, INADDR_ANY );
 
 # 3. 受付用ソケットと受付用ソケット情報を結びつける
 bind( $SockListen, $pack_addr ) or die "Cannot bind: $!";

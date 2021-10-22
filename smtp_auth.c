@@ -44,8 +44,7 @@ password ←base64
 
 #include "account.h"
 
-#define DEBUG_LV	1
-#define DebugMsg( lv, fmt, ... )	if( DEBUG_LV >= lv ) printf( fmt, ##__VA_ARGS__ )
+#define DebugMsg( lv, fmt, ... )	if( g_uDebugLv >= lv ) printf( fmt, ##__VA_ARGS__ )
 
 static inline int max( int a, int b ){
 	return a > b ? a : b;
@@ -59,6 +58,9 @@ static inline int max( int a, int b ){
 #define MAX_CONNECTION_CNT	3
 
 typedef unsigned int	BOOL;
+typedef unsigned int	UINT;
+
+UINT g_uDebugLv = 1;
 
 /*** smtp auth ステート *****************************************************/
 
@@ -105,7 +107,7 @@ int WriteChar( const char *pBuf, int fd, int iSize ){
 	// write
 	int iWriteSize	= 0;
 	
-	#if DEBUG_LV >= 3
+	if( g_uDebugLv >= 3 ){
 		int i;
 		printf( "%d> ", fd );
 		for( i = 0; i < iSize; ++i ){
@@ -114,7 +116,7 @@ int WriteChar( const char *pBuf, int fd, int iSize ){
 			else printf( "[%02X]", c );
 		}
 		printf( "\n" );
-	#endif
+	}
 	
 	while( iSize ){
 		iWriteSize = write( fd, pBuf, iSize );
@@ -142,7 +144,7 @@ int ReadLine( tStrBuf *pStrBuf ){
 			// \n が見つかったので改行スキップ
 			for(; i < pStrBuf->m_iTail && ( pStrBuf->m_szBuf[ i ] == '\r' || pStrBuf->m_szBuf[ i ] == '\n' ); ++i );
 			
-			#if DEBUG_LV >= 3
+			if( g_uDebugLv >= 3 ){
 				int j;
 				printf( "ReadLine>" );
 				for( j = 0; j < i; ++j ){
@@ -151,7 +153,7 @@ int ReadLine( tStrBuf *pStrBuf ){
 					else printf( "[%02X]", c );
 				}
 				printf( "\n" );
-			#endif
+			}
 			
 			return i;
 		}
@@ -425,10 +427,27 @@ int main( int argc, char **argv ){
 	int fdSockListen = -1;
 	struct sockaddr_in saSrcAddr;
 	
+	int iArgPtr = 1;
+	
+	if( iArgPtr < argc && argv[ iArgPtr ][ 0 ] == '-' && argv[ iArgPtr ][ 1 ] == 'd' ){
+		g_uDebugLv = atoi( argv[ iArgPtr ] + 2 );
+		DebugMsg( 1, "Debug Lv = %d\n", g_uDebugLv );
+		++iArgPtr;
+	}
+	
 	int iSrcPort = PORT_SRC;
 	int iDstPort = PORT_DST;
-	if( argc >= 2 ) iDstPort = atoi( argv[ 1 ]);
-	if( argc >= 3 ) iSrcPort = atoi( argv[ 2 ]);
+	
+	if( iArgPtr < argc ){
+		iDstPort = atoi( argv[ iArgPtr ]);
+		++iArgPtr;
+	}
+	
+	if( iArgPtr < argc ){
+		iSrcPort = atoi( argv[ iArgPtr ]);
+		++iArgPtr;
+	}
+	
 	printf( "smth_auth: %d <-- %d\n", iDstPort, iSrcPort );
 	
 	signal( SIGPIPE, SIG_IGN );	/* シグナルを無視する */
